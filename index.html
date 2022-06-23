@@ -1,0 +1,546 @@
+<!doctype html>
+<html>
+  <head>
+   <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GEO Track App</title>
+    <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.4.37.0.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="container">
+        <!--<h1>GEO Track App - Real-time Locating Service</h1>-->
+        <br>
+        <div class="row">
+            <div class="col" >
+                <span class="custom-bubble">
+                    <span id="active-label">0</span> active user(s)
+                </span>
+            </div>
+            <div class="col-auto">
+                <span id="geo-channel-id">GEO-Channel ID</span><span id="channel-label" class="custom-bubble">XXXXX</span> 
+            </div>
+        </div>
+        <br>
+        <div class="row justify-content-center">
+            <div id="map-canvas-div">
+                <div id="map-canvas" style="width:100;height:100%"></div>
+            </div>
+        </div>
+        <br>
+        <div class="row justify-content-start">
+            <div class="col-auto">
+                <button type="button" class="btn btn-create-new" id="newsession">Create new session</button>
+            </div>
+            <div class="col-auto my-2 my-sm-0 px-sm-0">
+                <button type="button" class="btn btn-invite " id="newinvite">Email invite link</button>
+                <button type="button" class="btn btn-invite mx-2" id="newinvitelink">Copy invite link</button>
+            </div>
+        </div>
+        <br>
+        <div class="row">
+          <div class="col">
+            <h3>Settings</h3>
+            <div class="form-check form-switch  mb-2">
+                <input class="form-check-input" type="checkbox" id="locationshareswitch">
+                <label class="form-check-label" for="locationshareswitch">Don't Update My Location</label>
+            </div>
+            <div class="form-check form-switch mb-2">
+                <input class="form-check-input" type="checkbox" id="fitviewswitch" checked>
+                <label class="form-check-label" for="fitviewswitch">Auto Fit View</label>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="plotnewswitch">
+                <label class="form-check-label" for="plotnewswitch">Plot New Paths</label>
+            </div> 
+            <br>  
+          </div>
+          <div class="col-lg-9 col-md-6">
+            <h3>User details</h3>
+            <span class="user-details-label">Username</span>
+            <div class="mb-3 input-group">
+                <input type="text" class="form-control" placeholder="Enter a new username" id="input-changeusername">
+                <div class="input-group-append">
+                    <button class="btn btn-outline-secondary user-details-button" type="button" id="button-changeusername">Update</button>
+                </div>
+            </div>
+            <span class="user-details-label">Greeting message</span>
+            <div class="mb-3 input-group">
+                <input type="text" class="form-control" placeholder="Enter a new greeting message" id="input-greet">
+                <div class="input-group-append">
+                    <button class="btn btn-outline-secondary user-details-button" type="button" id="send-greet">Update</button>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    <div class="container">
+      
+
+      
+    </div>
+
+    <script>
+    // 
+    function getParameterByName(name, url = window.location.href) {
+        name = name.replace(/[\[\]]/g, '\\$&');
+        var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+            results = regex.exec(url);
+        if (!results) return null;
+        if (!results[2]) return '';
+        return decodeURIComponent(results[2].replace(/\+/g, ' '));
+    }
+
+    function makeid(length) {
+        var result           = '';
+        var characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        var charactersLength = characters.length;
+        for ( var i = 0; i < length; i++ ) {
+        result += characters.charAt(Math.floor(Math.random() * 
+    charactersLength));
+    }
+    return result;
+    }
+    
+    var GEOchannel = getParameterByName('channel'); // Get channel or make a new channel
+    if (!GEOchannel) {
+        GEOchannel = makeid(5);
+    }
+    document.getElementById("channel-label").innerHTML = GEOchannel;
+    window.history.replaceState(null, null, "?channel="+GEOchannel);
+
+    var UUID = getParameterByName('uuid'); // Allows you to force a uuid
+    if (!UUID) {
+        let savedUUID = sessionStorage.getItem('uuid');
+        if (!savedUUID) {
+            UUID = makeid(15); // Make new UUID
+        } else {
+            UUID = savedUUID;
+        }
+    }
+    sessionStorage.setItem('uuid', UUID);
+
+    var username = getParameterByName('username'); // Allows you to force a name
+    if (!username) {
+        let savedusername = sessionStorage.getItem('username');
+        if (!savedusername) {
+            let input = prompt("Please enter your name to join the channel.");
+            if (input == null || input == "") {
+                username = "ANON_"+makeid(4); // If they dont give a name and no saved name then make them anonymous 
+            } else {
+                username = input.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
+            }
+        } else {
+            username = savedusername;
+        }
+    }
+    sessionStorage.setItem('username', username);
+
+    var pubnub = new PubNub({
+      publishKey:   'pub-c-481aaaf6-951b-495f-ad54-f71f4b372da9',
+      subscribeKey: 'sub-c-0c599162-7971-11ec-add2-a260b15b99c5',
+      uuid: UUID
+    });
+    function getLocation() {
+        if (navigator.geolocation) {
+            navigator.geolocation.watchPosition(showPosition);
+        } else {
+            alert("Not sharing location. Please refresh and try again to share.");
+        }
+    }
+    function showPosition(position) {
+       if ( document.getElementById('locationshareswitch').checked === false ) {
+        pubnub.objects.setChannelMembers({
+            channel: GEOchannel,
+            uuids: [
+                UUID,
+                { id: UUID, custom: {
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude,
+                    username: username,
+                    greeting: greeting
+                }},
+            ],
+        })
+        .then((resp) => {
+           //console.log(resp);
+        })
+        .catch((error) => {
+            console.log(err);
+        });
+        pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, greeting: greeting, lat:position.coords.latitude, lng:position.coords.longitude}});
+        pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, greeting: greeting, lat:position.coords.latitude, lng:position.coords.longitude}}); // For future feature: playback of user history
+       }
+    }
+   
+    var map;
+    var mark = [];
+    var lineCoords = {};
+    var lineCoordinatesPath = [];
+    var bounds = [];
+    var lastLat = "";
+    var lastLng = "";
+    var greeting = sessionStorage.getItem('greeting');
+    if (!greeting) {
+        greeting = "Not set.";
+    }
+    
+    sessionStorage.setItem('uuid', UUID);
+
+    var initialize = function() {
+        var myLatlng = new google.maps.LatLng(37.7749,122.4194);
+        map  = new google.maps.Map(document.getElementById('map-canvas'), {
+            zoom: 2,
+            center: myLatlng
+        })
+        bounds  = new google.maps.LatLngBounds();
+     // 
+    };
+
+    window.initialize = initialize;
+
+    var redraw = function(payload) {
+        if (payload.channel == GEOchannel) {
+            var lineSymbol = {
+                path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW
+            };
+            var lat = payload.message.lat;
+            var lng = payload.message.lng;
+            lastLat = lat;
+            lastLng = lng;
+            var uuid = payload.message.uuid;
+            var displayName = payload.message.username;
+            var greeting = payload.message.greeting;
+            var lastseen = new Date(payload.timetoken.substring(0, 10)*1000);
+            loc = new google.maps.LatLng(lat, lng);
+            if ( document.getElementById('plotnewswitch').checked === false ) {
+                lineCoords = [];
+                if (mark[uuid] && mark[uuid].setMap) {
+                    mark[uuid].setMap(null);
+                }
+                if (lineCoordinatesPath[uuid] && lineCoordinatesPath[uuid].setMap) {
+                    lineCoordinatesPath[uuid].setMap(null);
+                }
+                mark[uuid] = new google.maps.Marker({
+                    position:loc,
+                    map:map,
+                    label: {
+                        text: displayName,
+                        color: "#000000",
+                        fontWeight: "bold"
+                    }
+                });
+
+                var content = "Name: " + displayName + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + lat +  '<br>' + "Long: " + lng +  '<br>' + "Greeting: " + greeting;  
+
+                var infowindow = new google.maps.InfoWindow();
+
+                var markdata = mark[uuid];
+
+                google.maps.event.addListener(mark[uuid], 'click', (function(markdata,content,infowindow){ 
+                    return function() {
+                        infowindow.setContent(content);
+                        infowindow.open(map,markdata);
+                        google.maps.event.addListener(map,'click', function(){ 
+                            infowindow.close();
+                        });  
+                    };
+                })(markdata,content,infowindow));  
+
+                mark[uuid].setMap(map);
+            } else {
+                if (typeof lineCoords[uuid] == 'undefined' || lineCoords[uuid].length == 0) {
+                    lineCoords[uuid] = [];
+                }
+                if (mark[uuid] && mark[uuid].setMap) {
+                    mark[uuid].setMap(null);
+                }
+                if (lineCoordinatesPath[uuid] && lineCoordinatesPath[uuid].setMap) {
+                    lineCoordinatesPath[uuid].setMap(null);
+                }
+                lineCoords[uuid].push(loc);
+                lineCoordinatesPath[uuid] = new google.maps.Polyline({
+                    path: lineCoords[uuid],
+                    icons: [{
+                        icon: lineSymbol,
+                        repeat: '35px',
+                        offset: '100%'
+                    }],
+                    geodesic: true,
+                    strokeColor: '#C70E20'
+                });
+                lineCoordinatesPath[uuid].setMap(map);
+
+                mark[uuid] = new google.maps.Marker({
+                    position:loc,
+                    map:map,
+                    label: {
+                        text: displayName,
+                        color: "#000000",
+                        fontWeight: "bold"
+                    }
+                });
+
+                var content = "Name: " + displayName + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + lat +  '<br>' + "Long: " + lng +  '<br>' + "Greeting: " + greeting;  
+
+                var infowindow = new google.maps.InfoWindow();
+
+                google.maps.event.addListener(mark[uuid], 'click', function() {
+                    infowindow.setContent(content);
+                    infowindow.open(map,mark[uuid]);
+                    google.maps.event.addListener(map,'click', function(){ 
+                        infowindow.close();
+                    });      
+                });
+            
+                mark[uuid].setMap(map);
+            }
+            bounds.extend(loc);
+            if (document.getElementById('fitviewswitch').checked) {
+                map.fitBounds(bounds);       
+                map.panToBounds(bounds); 
+            }
+        } else if (payload.channel ==  GEOchannel+".greet") {
+            alert(payload.message);
+        }    
+    };
+
+    pubnub.subscribe({channels: [GEOchannel, GEOchannel+'.greet'], withPresence: true});
+    pubnub.addListener({
+        message:redraw,
+        presence: (presenceEvent) => {
+            document.getElementById("active-label").innerHTML = presenceEvent.occupancy;
+        },
+    });
+
+    getLocation();
+
+    pubnub.hereNow({
+        channels: [GEOchannel],
+    }).then((response) => {
+        document.getElementById("active-label").innerHTML = response.totalOccupancy;
+    }).catch((error) => {
+        console.log(error)
+    });
+
+    function loadLastLocations(loadChannel) {
+        pubnub.objects.getChannelMembers({
+            channel: loadChannel,
+            include: {
+                customFields: true,
+                UUIDFields: true,
+                customUUIDFields: true,
+            },
+        }).then(response => {
+            console.log(response);
+            var arrayLength = response.data.length;
+            for (var i = 0; i < arrayLength; i++) {
+                if (response.data[i].uuid.id != UUID && response.data[i].custom) {
+                    loc = new google.maps.LatLng(response.data[i].custom.lat, response.data[i].custom.lng);
+                    mark[response.data[i].uuid.id] = new google.maps.Marker({
+                        position:loc,
+                        map:map,
+                        label: {
+                            text: response.data[i].custom.username,
+                            color: "#000000",
+                            fontWeight: "bold",
+                        }
+                    });
+
+                    console.log(response.data[i]);
+
+                    var lastseen = new Date(response.data[i].updated);
+
+                    var content = "Name: " + response.data[i].custom.username + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + response.data[i].custom.lat +  '<br>' + "Long: " + response.data[i].custom.lng +  '<br>' + "Greeting: " + response.data[i].custom.greeting;  
+
+                    var infowindow = new google.maps.InfoWindow();
+
+                    var markdata = response.data[i];
+
+                    google.maps.event.addListener(mark[markdata.uuid.id], 'click', (function(markdata,content,infowindow){ 
+                        return function() {
+                            infowindow.setContent(content);
+                            infowindow.open(map,mark[markdata.uuid.id]);
+                            google.maps.event.addListener(map,'click', function(){ 
+                                infowindow.close();
+                            });  
+                        };
+                    })(markdata,content,infowindow));  
+                    
+    
+                    mark[response.data[i].uuid.id].setMap(map);
+                    bounds.extend(loc);
+                }
+            }
+            if (document.getElementById('fitviewswitch').checked) {
+                map.fitBounds(bounds);       
+                map.panToBounds(bounds); 
+            }
+        });
+    };
+
+    loadLastLocations(GEOchannel);
+    
+    const validateEmail = (email) => {
+        return String(email)
+            .toLowerCase()
+            .match(
+            /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+        );
+    };
+
+    function fallbackCopyTextToClipboard(text) {
+        var textArea = document.createElement("textarea");
+        textArea.value = text;
+        
+        // Avoid scrolling to bottom
+        textArea.style.top = "0";
+        textArea.style.left = "0";
+        textArea.style.position = "fixed";
+
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {
+            var successful = document.execCommand('copy');
+            var msg = successful ? 'successful' : 'unsuccessful';
+            console.log('Fallback: Copying text command was ' + msg);
+        } catch (err) {
+            console.error('Fallback: Oops, unable to copy', err);
+        }
+
+        document.body.removeChild(textArea);
+        }
+        function copyTextToClipboard(text) {
+        if (!navigator.clipboard) {
+            fallbackCopyTextToClipboard(text);
+            return;
+        }
+        navigator.clipboard.writeText(text).then(function() {
+            console.log('Async: Copying to clipboard was successful!');
+        }, function(err) {
+            console.error('Async: Could not copy text: ', err);
+        });
+        }
+
+    document.getElementById("newsession").addEventListener("click", function() {
+        if (confirm("Are you sure you want to create a new session? You'll be the only participant.")) {
+            pubnub.unsubscribe({channels: [GEOchannel, GEOchannel+'.greet']});
+            sessionStorage.removeItem('channel');
+            map = null;
+            bounds = [];
+            lineCoords = {};
+            lineCoordinatesPath = [];
+            GEOchannel = makeid(5);
+            document.getElementById("channel-label").innerHTML = GEOchannel;
+            window.history.replaceState(null, null, "?channel="+GEOchannel);
+            var myLatlng = new google.maps.LatLng(37.7749,122.4194);
+            map = new google.maps.Map(document.getElementById('map-canvas'), {
+                zoom: 2,
+                center: myLatlng
+            })
+            bounds = new google.maps.LatLngBounds();
+            loadLastLocations(GEOchannel); // Load any history on the channel
+            pubnub.subscribe({channels: [GEOchannel, GEOchannel+'.greet'], withPresence: true});
+            if ( document.getElementById('locationshareswitch').checked === false ) { // Add self to map.
+                pubnub.objects.setChannelMembers({
+                    channel: GEOchannel,
+                    uuids: [
+                        UUID,
+                        { id: UUID, custom: {
+                            lat: lastLat,
+                            lng: lastLng,
+                            username: username,
+                            greeting: greeting
+                        }},
+                    ],
+                })
+                .then((resp) => {
+                //console.log(resp);
+                })
+                .catch((error) => {
+                    console.log(err);
+                });
+                pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}});
+                pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
+            }
+        };
+    }); 
+
+    document.getElementById("newinvite").addEventListener("click", function() {
+        let input = prompt("Please enter an email to invite.");
+        if (input != null || input != "") {
+            if (validateEmail(input)) {
+                var body = 'Join me and share locations on the GEO Track App. Join with this link: '+window.location.href.split("?")[0]+'?channel='+GEOchannel;
+                window.open('mailto:'+input+'?subject=GEO Track Invite&body='+encodeURIComponent(body));
+            }
+        }
+    });
+
+    document.getElementById("newinvitelink").addEventListener("click", function() {
+        if (confirm("Do you want to copy the link to share your session?")) {     
+            copyTextToClipboard(window.location.href.split("?")[0]+'?channel='+GEOchannel);
+        }
+    });
+
+    document.getElementById("button-changeusername").addEventListener("click", function() {
+        username = document.getElementById('input-changeusername').value.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
+        sessionStorage.setItem('username', username);
+        pubnub.objects.setChannelMembers({ // update username
+            channel: GEOchannel,
+            uuids: [
+                UUID,
+                { id: UUID, custom: {
+                    lat: lastLat,
+                    lng: lastLng,
+                    username: username,
+                    greeting: greeting
+                }},
+                
+            ],
+        })
+        .then((resp) => {
+           //console.log(resp);
+        })
+        .catch((error) => {
+            console.log(err);
+        });
+        pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // resend last point to update map labels for other users.
+        pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
+        alert("Your username has been updated.");
+        //window.location = window.location.href.split("?")[0]+'?channel='+GEOchannel;
+    }); 
+
+    document.getElementById("send-greet").addEventListener("click", function() {
+        pubnub.publish({channel:GEOchannel+".greet", message:username+" says: "+document.getElementById('input-greet').value});
+        sessionStorage.setItem('greeting', document.getElementById('input-greet').value);
+
+        pubnub.objects.setChannelMembers({ // update greeting 
+            channel: GEOchannel,
+            uuids: [
+                UUID,
+                { id: UUID, custom: {
+                    lat: lastLat,
+                    lng: lastLng,
+                    username: username,
+                    greeting: document.getElementById('input-greet').value
+                }},
+            ],
+        })
+        .then((resp) => {
+           //console.log(resp);
+        })
+        .catch((error) => {
+            console.log(err);
+        });
+        alert("You've updated your greeting.");
+    }); 
+    
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAU65OJQnbdXHhhv5kyiLd_8yp5v0cKayM&callback=initialize"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>
+</body>
+</html>
