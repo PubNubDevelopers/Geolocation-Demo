@@ -77,12 +77,6 @@
           </div>
         </div>
       </div>
-    <div class="container">
-      
-
-      
-    </div>
-
     <script>
 
     function getParameterByName(name, url = window.location.href) {
@@ -145,6 +139,7 @@
       subscribeKey: 'sub-c-0c599162-7971-11ec-add2-a260b15b99c5',
       uuid: UUID
     });
+
     function getLocation() {
         if (navigator.geolocation) {
             navigator.geolocation.watchPosition(showPosition);
@@ -152,6 +147,7 @@
             alert("Not sharing location. Please refresh and try again to share.");
         }
     }
+
     function showPosition(position) {
        if ( document.getElementById('locationshareswitch').checked === false ) {
         pubnub.objects.setChannelMembers({
@@ -189,8 +185,6 @@
         greeting = "Not set.";
     }
     
-    sessionStorage.setItem('uuid', UUID);
-
     var initialize = function() {
         var myLatlng = new google.maps.LatLng(37.7749,122.4194);
         map  = new google.maps.Map(document.getElementById('map-canvas'), {
@@ -416,8 +410,9 @@
         }
 
         document.body.removeChild(textArea);
-        }
-        function copyTextToClipboard(text) {
+    }
+
+    function copyTextToClipboard(text) {
         if (!navigator.clipboard) {
             fallbackCopyTextToClipboard(text);
             return;
@@ -427,7 +422,7 @@
         }, function(err) {
             console.error('Async: Could not copy text: ', err);
         });
-        }
+    }
 
     document.getElementById("newsession").addEventListener("click", function() {
         if (confirm("Are you sure you want to create a new session? You'll start as the only participant.")) {
@@ -524,7 +519,6 @@
     document.getElementById("send-greet").addEventListener("click", function() {
         pubnub.publish({channel:GEOchannel+".greet", message:username+" says: "+document.getElementById('input-greet').value});
         sessionStorage.setItem('greeting', document.getElementById('input-greet').value);
-
         pubnub.objects.setChannelMembers({ // update greeting 
             channel: GEOchannel,
             uuids: [
