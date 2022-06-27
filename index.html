@@ -487,7 +487,8 @@
     document.getElementById("newinvitelink").addEventListener("click", function() {
         if (confirm("Do you want to copy the link to share your session?")) {     
             copyTextToClipboard(window.location.href.split("?")[0]+'?channel='+GEOchannel);
-            actionCompleted({action: 'Send Invite', debug: true}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+            actionCompleted({action: 'Send Invite', windowLocation: window.location.href, debug: true}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+            console.log(window.location.href);
         }
     });
 
