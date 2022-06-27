@@ -411,7 +411,6 @@
 
         document.body.removeChild(textArea);
     }
-
     function copyTextToClipboard(text) {
         if (!navigator.clipboard) {
             fallbackCopyTextToClipboard(text);
@@ -519,6 +518,7 @@
     document.getElementById("send-greet").addEventListener("click", function() {
         pubnub.publish({channel:GEOchannel+".greet", message:username+" says: "+document.getElementById('input-greet').value});
         sessionStorage.setItem('greeting', document.getElementById('input-greet').value);
+
         pubnub.objects.setChannelMembers({ // update greeting 
             channel: GEOchannel,
             uuids: [
