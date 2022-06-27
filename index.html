@@ -516,7 +516,7 @@
         });
         pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // resend last point to update map labels for other users.
         pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
-        actionCompleted({action: 'Change Username'});//This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+        actionCompleted({action: 'Change Username', windowLocation: orglocation}); //This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         alert("Your username has been updated.");
         //window.location = window.location.href.split("?")[0]+'?channel='+GEOchannel;
     }); 
