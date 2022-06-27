@@ -8,6 +8,7 @@
     <script src="https://cdn.pubnub.com/sdk/javascript/pubnub.4.37.0.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
     <link rel="stylesheet" href="styles.css">
+    <link href='https://fonts.googleapis.com/css?family=Poppins' rel='stylesheet'>
   </head>
   <body>
     <div class="container">
@@ -57,7 +58,7 @@
             </div> 
             <br>  
           </div>
-          <div class="col-lg-9 col-md-6">
+          <div class="col-lg-8 col-md-6">
             <h3>User details</h3>
             <span class="user-details-label">Username</span>
             <div class="mb-3 input-group">
@@ -243,6 +244,7 @@
                     return function() {
                         infowindow.setContent(content);
                         infowindow.open(map,markdata);
+                        actionCompleted({action: 'View User Details'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
                         google.maps.event.addListener(map,'click', function(){ 
                             infowindow.close();
                         });  
@@ -334,7 +336,7 @@
                 customUUIDFields: true,
             },
         }).then(response => {
-            console.log(response);
+            // console.log(response);
             var arrayLength = response.data.length;
             for (var i = 0; i < arrayLength; i++) {
                 if (response.data[i].uuid.id != UUID && response.data[i].custom) {
@@ -427,7 +429,7 @@
         }
 
     document.getElementById("newsession").addEventListener("click", function() {
-        if (confirm("Are you sure you want to create a new session? You'll be the only participant.")) {
+        if (confirm("Are you sure you want to create a new session? You'll start as the only participant.")) {
             pubnub.unsubscribe({channels: [GEOchannel, GEOchannel+'.greet']});
             sessionStorage.removeItem('channel');
             map = null;
@@ -467,6 +469,7 @@
                 pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}});
                 pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
             }
+            actionCompleted({action: 'Create New Session'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         };
     }); 
 
@@ -476,6 +479,7 @@
             if (validateEmail(input)) {
                 var body = 'Join me and share locations on the GEO Track App. Join with this link: '+window.location.href.split("?")[0]+'?channel='+GEOchannel;
                 window.open('mailto:'+input+'?subject=GEO Track Invite&body='+encodeURIComponent(body));
+                actionCompleted({action: 'Send Invite'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
             }
         }
     });
@@ -483,6 +487,7 @@
     document.getElementById("newinvitelink").addEventListener("click", function() {
         if (confirm("Do you want to copy the link to share your session?")) {     
             copyTextToClipboard(window.location.href.split("?")[0]+'?channel='+GEOchannel);
+            actionCompleted({action: 'Send Invite'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         }
     });
 
@@ -510,6 +515,7 @@
         });
         pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // resend last point to update map labels for other users.
         pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
+        actionCompleted({action: 'Change Username'});//This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         alert("Your username has been updated.");
         //window.location = window.location.href.split("?")[0]+'?channel='+GEOchannel;
     }); 
@@ -536,8 +542,107 @@
         .catch((error) => {
             console.log(err);
         });
+        actionCompleted({action: 'Send Greeting'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         alert("You've updated your greeting.");
-    }); 
+    });
+
+    //The below function is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+    var actionCompleted = function(args) {
+        const pub = 'pub-c-c8d024f7-d239-47c3-9a7b-002f346c1849';
+        const sub = 'sub-c-95fe09e0-64bb-4087-ab39-7b14659aab47';
+        let identifier = "";
+        let action = args.action;
+        let blockDuplicateCalls = args.blockDuplicateCalls;
+        let debug = args.debug;
+        let windowLocation = args.windowLocation;
+
+        if (typeof action === 'undefined')
+        {
+            console.log('Interactive Demo Integration Error: No action provided');        
+            return;
+        }
+
+        if (typeof blockDuplicateCalls === 'undefined')
+        {
+            blockDuplicateCalls = true;
+        }
+
+        if (typeof debug === 'undefined')
+        {
+            debug = false;
+        }
+
+        //  If invoked from client-side, you can omit the window location
+        if (typeof windowLocation === 'undefined')
+            windowLocation = window.location.href;
+
+        var fetchClient = null;
+        if (typeof fetch === 'undefined')
+            fetchClient = args.fetchClient;
+        else
+            fetchClient = fetch;
+
+        let queryString = new URL(windowLocation).search.substring(1);
+        const urlParamsArray = queryString.split('&');
+        for (let i = 0; i < urlParamsArray.length; i++) {
+            if (urlParamsArray[i].startsWith('identifier') && urlParamsArray[i].includes('=')) {
+                let identifierPair = urlParamsArray[i].split('=');
+                identifier = identifierPair[1];
+            }
+        }
+        if (identifier === "") {
+            if (debug)
+            {
+                console.log('Interactive Demo Integration Error: Failed to detect identifier in URL query string');
+            }
+            return;
+        }
+        if (blockDuplicateCalls) {
+            //  This option only works if the sessionStorage object is defined (client-side only)
+            try {
+                if (!(typeof sessionStorage === 'undefined')) {
+                    //  Read the id from session storage and only send the message if the message was not previous sent
+                    let sessionStorageKey = "Demo_" + identifier + action;
+                    let storedId = sessionStorage.getItem(sessionStorageKey);
+                    if (storedId == null) {
+                        if (debug)
+                            console.log('Setting session key to avoid duplicate future messages being sent. Action: ' + action + '. Identifier: ' + identifier);
+                            sessionStorage.setItem(sessionStorageKey, "set");
+                    }
+                    else {
+                        //  This is a duplicate message, do not send it
+                        if (debug)
+                            console.log('Message blocked as it is a duplicate. Action: ' + action + '. Identifier: ' + identifier);
+                        return;
+                    }
+                }                   
+            }
+            catch (err) {} //  Session storage is not available
+
+        }
+
+        if (debug)
+        {
+            console.log('Sending message. Action: ' + action + '. Identifier: ' + identifier);
+        }
+        
+        const url = `https://ps.pndsn.com/publish/${pub}/${sub}/0/demo/myCallback/${encodeURIComponent(JSON.stringify({ id: identifier, feature: action }))}?store=0&uuid=${identifier}`;
+        fetchClient(url)
+            .then(response => {
+            if (!response.ok) {
+                throw new Error(response.status + ' ' + response.statusText);
+            }
+            return response;
+        })
+            .then(data => {
+            //  Successfully set demo action with demo server
+            console.log("Guided Demo Integration success", url, data)
+        })
+            .catch(e => {
+            console.log('Interactive Demo Integration: ', e);
+        });
+        return;
+    } 
     
     </script>
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAU65OJQnbdXHhhv5kyiLd_8yp5v0cKayM&callback=initialize"></script>

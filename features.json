@@ -1,0 +1,9 @@
+{
+    "features": [
+      "Change Username",
+      "Send Greeting",
+      "Send Invite",
+      "View User Details",
+      "Create New Session"
+    ]
+}
