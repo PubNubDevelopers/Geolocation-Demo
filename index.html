@@ -84,10 +84,6 @@
     </div>
 
     <script>
-    // 
-
-    var orglocation = window.location.href
-    console.log(orglocation);
 
     function getParameterByName(name, url = window.location.href) {
         name = name.replace(/[\[\]]/g, '\\$&');
@@ -114,6 +110,7 @@
         GEOchannel = makeid(5);
     }
     document.getElementById("channel-label").innerHTML = GEOchannel;
+    var orglocation = window.location.href; // This is saved for the interactive demo on PubNub.com. It is not part of the demo of this application. 
     window.history.replaceState(null, null, "?channel="+GEOchannel);
 
     var UUID = getParameterByName('uuid'); // Allows you to force a uuid
@@ -248,7 +245,7 @@
                     return function() {
                         infowindow.setContent(content);
                         infowindow.open(map,markdata);
-                        actionCompleted({action: 'View User Details'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+                        actionCompleted({action: 'View User Details', windowLocation: orglocation}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
                         google.maps.event.addListener(map,'click', function(){ 
                             infowindow.close();
                         });  
@@ -473,7 +470,7 @@
                 pubnub.publish({channel:GEOchannel, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}});
                 pubnub.publish({channel:GEOchannel+"."+UUID, message:{uuid:UUID, username:username, lat:lastLat, lng:lastLng}}); // For future feature: playback of user history
             }
-            actionCompleted({action: 'Create New Session'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+            actionCompleted({action: 'Create New Session', windowLocation: orglocation}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         };
     }); 
 
@@ -483,7 +480,7 @@
             if (validateEmail(input)) {
                 var body = 'Join me and share locations on the GEO Track App. Join with this link: '+window.location.href.split("?")[0]+'?channel='+GEOchannel;
                 window.open('mailto:'+input+'?subject=GEO Track Invite&body='+encodeURIComponent(body));
-                actionCompleted({action: 'Send Invite'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+                actionCompleted({action: 'Send Invite', windowLocation: orglocation}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
             }
         }
     });
@@ -491,7 +488,7 @@
     document.getElementById("newinvitelink").addEventListener("click", function() {
         if (confirm("Do you want to copy the link to share your session?")) {     
             copyTextToClipboard(window.location.href.split("?")[0]+'?channel='+GEOchannel);
-            actionCompleted({action: 'Send Invite', windowLocation: orglocation, debug: true}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+            actionCompleted({action: 'Send Invite', windowLocation: orglocation}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         }
     });
 
@@ -546,7 +543,7 @@
         .catch((error) => {
             console.log(err);
         });
-        actionCompleted({action: 'Send Greeting'}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
+        actionCompleted({action: 'Send Greeting', windowLocation: orglocation}); // This is for the interactive demo on PubNub.com. It is not part of the demo of this application. 
         alert("You've updated your greeting.");
     });
 
