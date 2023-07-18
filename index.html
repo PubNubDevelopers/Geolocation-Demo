@@ -20,16 +20,23 @@
                     <span id="active-label">0</span> active user(s)
                 </span>
             </div>
-            <div class="col-auto">
+            <div class="col" style="text-align: right;">
                 <span id="geo-channel-id">GEO-Channel ID</span><span id="channel-label" class="custom-bubble">XXXXX</span> 
-            </div>
+            </div>   
         </div>
         <br>
         <div class="row justify-content-center">
-            <div id="map-canvas-div">
-                <div id="map-canvas" style="width:100;height:100%"></div>
+            <div id="map-canvas-div" class="col-lg-9">
+                <div id="map-canvas" style="width:100%;height:100%"></div>
             </div>
-        </div>
+            <div id="location-details-div" class="col-lg-3">
+                <div id="location-header-div">
+                    <img id="location-header-image" src="images/openai.png"> 
+                    <h4 id="location-header">Learn more about your location powered by PubNub and ChatGPT</h4>
+                </div>
+                <textarea id="location-details-text" class="form-control" rows="17" readonly>Waiting for location updates...</textarea>
+            </div>
+        </div>    
         <br>
         <div class="row justify-content-start">
             <div class="col-auto">

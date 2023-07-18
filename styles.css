@@ -84,7 +84,7 @@ body {
 }
 
 #map-canvas-div {
-    width: 100%;
+    padding-right: 10px;
 }
 
 #geo-channel-id {
@@ -95,6 +95,52 @@ body {
     line-height: 24px;
     color: #000000;
     padding-right: 16px;
+}
+
+#location-details-div {
+    padding-left: 10px;
+    border-radius: 10px;
+}
+
+#location-details-text {
+    resize: none; /* prevents user from changing the textarea size */
+    margin-top: 20px;
+    overflow-y: auto;
+    font-style: italic; /* makes the font italic */
+    font-family: 'Poppins';
+    font-size: 16px;
+}
+
+#location-header {
+    font-size: 15px; /* Adjust this value to make the header smaller */
+    display: inline-block;
+    position: relative;
+}
+
+#location-header-div {
+    display: flex;
+    align-items: center;
+    background: #33687B;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-family: 'Poppins';
+    font-style: normal;
+    font-size: 16px;
+    line-height: 24px;
+    color: #FFFFFF;
+}
+
+#location-header-image {
+    width: 40px; /* adjust this to change the width */
+    height: 40px; /* adjust this to change the height */
+    margin-right: 10px; /* adjust this to create space between the image and the header */
+}
+
+@media only screen and (max-width: 992px) {
+    #location-details-div {
+        margin-left: 15px;
+        margin-right: 15px;
+    }
 }
 
 @media only screen and (max-width: 600px) {
@@ -110,5 +156,4 @@ body {
 @media only screen and (min-width: 992px) {
     #map-canvas-div {height: 524px;}
     .form-check-input {margin-right: 80px;}
-} 
-
+}

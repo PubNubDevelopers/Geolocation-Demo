@@ -54,10 +54,14 @@ if (!username) {
 sessionStorage.setItem('username', username);
 
 var pubnub = new PubNub({
-  publishKey:   'pub-c-481aaaf6-951b-495f-ad54-f71f4b372da9',
-  subscribeKey: 'sub-c-0c599162-7971-11ec-add2-a260b15b99c5',
+  publishKey:   'YOUR_PUBLISH_KEY',
+  subscribeKey: 'YOUR_SUBSCRIBE_KEY',
   uuid: UUID
 });
+
+//ChatGPT Integration
+var chatGPTChannel = `chatgpt.facts.${UUID}`;
+var chatGPTResponseArea = document.getElementById("location-details-text");
 
 function getLocation() {
     if (navigator.geolocation) {
@@ -66,7 +70,7 @@ function getLocation() {
         alert("Not sharing location. Please refresh and try again to share.");
     }
 }
-
+  
 async function showPosition(position) {
    if ( document.getElementById('locationshareswitch').checked === false ) { 
     //Set the channel members
@@ -92,6 +96,10 @@ async function showPosition(position) {
     publishMessage(GEOchannel, message);
     // For future feature: playback of user history
     publishMessage(GEOchannel+"."+UUID, message);
+
+    //Get interesting facts about the coordinates
+    //TODO: Make it only update if the city has changed?
+    publishMessage(chatGPTChannel, `(${position.coords.latitude},${position.coords.longitude})`);
    }
 }
 
@@ -222,11 +230,24 @@ var redraw = function(payload) {
         }
     } else if (payload.channel ==  GEOchannel+".greet") {
         alert(payload.message);
-    }    
+    } else if(payload.channel == chatGPTChannel && (payload.message.sender != undefined && payload.message.sender != pubnub.uuid)) { //Display response from ChatGPT, not from ourselves.
+        chatGPTResponseArea.value = '';
+        var speed = 50;  
+        let i = 0;
+        let intervalId = setInterval(() => {
+            if (i < payload.message.content.text.length) {
+                chatGPTResponseArea.value += payload.message.content.text[i];
+                i++;
+            } else {
+                clearInterval(intervalId);
+            }
+        }, speed);
+
+    }
 };
 
 pubnub.subscribe({
-    channels: [GEOchannel, GEOchannel+'.greet'], 
+    channels: [GEOchannel, GEOchannel+'.greet', chatGPTChannel], 
     withPresence: true
 });
 
