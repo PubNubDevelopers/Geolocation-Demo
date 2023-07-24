@@ -62,6 +62,12 @@ var pubnub = new PubNub({
 //ChatGPT Integration
 var chatGPTChannel = `chatgpt.facts.${UUID}`;
 var chatGPTResponseArea = document.getElementById("location-details-text");
+var currentPosition = {
+    lat: null,
+    long: null,
+    city: null
+};
+const DISTANCE_BETWEEN_CITIES_MILES = 1; //A constant that is used to determine if ChatGPT should be updated based on location.
 
 function getLocation() {
     if (navigator.geolocation) {
@@ -72,7 +78,7 @@ function getLocation() {
 }
   
 async function showPosition(position) {
-   if ( document.getElementById('locationshareswitch').checked === false ) { 
+   if ( document.getElementById('locationshareswitch').checked === false ) {  
     //Set the channel members
     var uuids = [
         UUID,
@@ -97,9 +103,8 @@ async function showPosition(position) {
     // For future feature: playback of user history
     publishMessage(GEOchannel+"."+UUID, message);
 
-    //Get interesting facts about the coordinates
-    //TODO: Make it only update if the city has changed?
-    publishMessage(chatGPTChannel, `(${position.coords.latitude},${position.coords.longitude})`);
+    //Determine if Publish Message to ChatGPT to evaluate with facts
+    sendMessageChatGPT(position.coords.latitude, position.coords.longitude);
    }
 }
 
@@ -524,4 +529,53 @@ async function publishMessage(channel, message) {
     } catch (status) {
         console.log(status);
     }
+}
+
+// Evaluates the coordinates to determine city and send to ChatGPT to return facts if a new city.
+function sendMessageChatGPT(latitude, longitude) {
+    var geocoder = new google.maps.Geocoder;
+    var latlng = {lat: parseFloat(latitude), lng: parseFloat(longitude)};
+    var city = null;
+
+    //Determine if the provided coordinates have a matching city. If they do, send to ChatGPT.
+    geocoder.geocode({'location': latlng}, function(results, status) {
+        if (status === 'OK') {
+            if (results[0]) {
+                for (var i = 0; i < results[0].address_components.length; i++) {
+                    if (results[0].address_components[i].types.indexOf('locality') !== -1) {
+                        city = results[0].address_components[i].long_name;
+                        break;
+                    }
+                }
+
+                //If there is no set position yet, force the distance check to pass.
+                var distance = (currentPosition.lat === null || currentPosition.long === null) ? DISTANCE_BETWEEN_CITIES_MILES + 1 : getDistanceMiles(currentPosition.lat, currentPosition.long, latitude, longitude);
+                
+                //If the coordinates match a valid city and is a new city, along with being more than a set amount of miles inbetween, send to ChatGPT to evaluate.
+                if(city != null && city != currentPosition.city && distance > DISTANCE_BETWEEN_CITIES_MILES) {
+                    currentPosition.city = city;
+                    currentPosition.lat = latitude;
+                    currentPosition.long = longitude;      
+                    //Get interesting facts about the coordinates from ChatGPT
+                    publishMessage(chatGPTChannel, `(${latitude},${longitude})`);    
+                }                     
+            } 
+            //Didn't find a matching City. Update the field appropriately.
+            else if (currentPosition.city == "") { 
+                chatGPTResponseArea.value = "Couldn't find a matching city based on your coordinates...";
+            }
+        } else {
+            console.log('Geocoder failed due to: ' + status);
+        }
+    });
+}
+
+// AI-Generated Code
+// Tool: ChatGPT v4
+function getDistanceMiles(originalLat, originalLng, newLat, newLng) {
+    var originalLatLng = new google.maps.LatLng(originalLat, originalLng);
+    var newLatLng = new google.maps.LatLng(newLat, newLng);
+    var distanceInMeters = google.maps.geometry.spherical.computeDistanceBetween(originalLatLng, newLatLng);
+    // Convert distance to miles
+    return distanceInMeters / 1609.34;
 }
