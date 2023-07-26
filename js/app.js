@@ -64,10 +64,9 @@ var chatGPTChannel = `chatgpt.facts.${UUID}`;
 var chatGPTResponseArea = document.getElementById("location-details-text");
 var currentPosition = {
     lat: null,
-    long: null,
-    city: null
+    long: null
 };
-const DISTANCE_BETWEEN_CITIES_MILES = 1; //A constant that is used to determine if ChatGPT should be updated based on location.
+const DISTANCE_BETWEEN_LOCATIONS_MILES = 2; //A constant that is used to determine if ChatGPT should be updated based on location.
 
 function getLocation() {
     if (navigator.geolocation) {
@@ -235,18 +234,20 @@ var redraw = function(payload) {
     } else if (payload.channel ==  GEOchannel+".greet") {
         alert(payload.message);
     } else if(payload.channel == chatGPTChannel && (payload.message.sender != undefined && payload.message.sender != pubnub.uuid)) { //Display response from ChatGPT, not from ourselves.
-        chatGPTResponseArea.value = '';
-        var speed = 50;  
-        let i = 0;
-        let intervalId = setInterval(() => {
-            if (i < payload.message.content.text.length) {
-                chatGPTResponseArea.value += payload.message.content.text[i];
-                i++;
-            } else {
-                clearInterval(intervalId);
-            }
-        }, speed);
-
+        //Don't update if ChatGPT couldn't find the location.
+        if(payload.message !== "DNE.") {
+            chatGPTResponseArea.value = '';
+            var speed = 50;  
+            let i = 0;
+            let intervalId = setInterval(() => {
+                if (i < payload.message.content.text.length) {
+                    chatGPTResponseArea.value += payload.message.content.text[i];
+                    i++;
+                } else {
+                    clearInterval(intervalId);
+                }
+            }, speed);  
+        }      
     }
 };
 
@@ -533,41 +534,16 @@ async function publishMessage(channel, message) {
 
 // Evaluates the coordinates to determine city and send to ChatGPT to return facts if a new city.
 function sendMessageChatGPT(latitude, longitude) {
-    var geocoder = new google.maps.Geocoder;
-    var latlng = {lat: parseFloat(latitude), lng: parseFloat(longitude)};
-    var city = null;
-
-    //Determine if the provided coordinates have a matching city. If they do, send to ChatGPT.
-    geocoder.geocode({'location': latlng}, function(results, status) {
-        if (status === 'OK') {
-            if (results[0]) {
-                for (var i = 0; i < results[0].address_components.length; i++) {
-                    if (results[0].address_components[i].types.indexOf('locality') !== -1) {
-                        city = results[0].address_components[i].long_name;
-                        break;
-                    }
-                }
-
-                //If there is no set position yet, force the distance check to pass.
-                var distance = (currentPosition.lat === null || currentPosition.long === null) ? DISTANCE_BETWEEN_CITIES_MILES + 1 : getDistanceMiles(currentPosition.lat, currentPosition.long, latitude, longitude);
-                
-                //If the coordinates match a valid city and is a new city, along with being more than a set amount of miles inbetween, send to ChatGPT to evaluate.
-                if(city != null && city != currentPosition.city && distance > DISTANCE_BETWEEN_CITIES_MILES) {
-                    currentPosition.city = city;
-                    currentPosition.lat = latitude;
-                    currentPosition.long = longitude;      
-                    //Get interesting facts about the coordinates from ChatGPT
-                    publishMessage(chatGPTChannel, `(${latitude},${longitude})`);    
-                }                     
-            } 
-            //Didn't find a matching City. Update the field appropriately.
-            else if (currentPosition.city == "") { 
-                chatGPTResponseArea.value = "Couldn't find a matching city based on your coordinates...";
-            }
-        } else {
-            console.log('Geocoder failed due to: ' + status);
-        }
-    });
+    //If there is no set position yet, force the distance check to pass.
+    var distance = (currentPosition.lat === null || currentPosition.long === null) ? DISTANCE_BETWEEN_LOCATIONS_MILES + 1 : getDistanceMiles(currentPosition.lat, currentPosition.long, latitude, longitude);
+    
+    //If the coordinates are more than a set amount of miles inbetween, send to ChatGPT to evaluate.
+    if(distance > DISTANCE_BETWEEN_LOCATIONS_MILES) {
+        currentPosition.lat = latitude;
+        currentPosition.long = longitude;      
+        //Get interesting facts about the coordinates from ChatGPT
+        publishMessage(chatGPTChannel, `(${latitude},${longitude})`);    
+    }                       
 }
 
 // AI-Generated Code
