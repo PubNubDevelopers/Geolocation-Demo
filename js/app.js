@@ -66,7 +66,7 @@ var currentPosition = {
     lat: null,
     long: null
 };
-const DISTANCE_BETWEEN_LOCATIONS_MILES = 2; //A constant that is used to determine if ChatGPT should be updated based on location.
+const DISTANCE_BETWEEN_LOCATIONS_MILES = 5; //A constant that is used to determine if ChatGPT should be updated based on location.
 
 function getLocation() {
     if (navigator.geolocation) {
