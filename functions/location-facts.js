@@ -56,6 +56,6 @@ export default async (request) => {
     return request.ok()
   } catch (error) {
     console.log('Location facts failed:', error)
-    return request.ok() // The location message itself always goes through.
+    return request.ok() // After Publish: the request was already delivered, ok() just ends this run.
   }
 }
