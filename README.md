@@ -3,7 +3,7 @@
 Share your location with everyone in a session and see them all on one map, in real time. Try it on [PubNub's website](https://www.pubnub.com/demos/geolocation-demo/), or follow the [tutorial](https://www.pubnub.com/tutorials/geolocation-tracking-tutorial-javascript/).
 
 <p align="middle">
-  <img src="/images/geo-demo-chatgpt.png"/>
+  <img src="/images/geo-tracker.png" alt="Two users in one session on the map"/>
 </p>
 
 The demo runs in the browser with the [PubNub JavaScript SDK](https://www.pubnub.com/docs/sdks/javascript) and these PubNub features:
