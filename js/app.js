@@ -43,7 +43,7 @@ const pubnub = new PubNub({
 
 // Map: Leaflet with OpenStreetMap tiles, no API key needed.
 const map = L.map('map-canvas').setView([37.7749, -122.4194], 2)
-// OpenStreetMap's tile servers are fine for a tutorial. For production, use a tile provider: see the tutorial.
+// OpenStreetMap's tile servers are fine for a tutorial, not for heavy use: in production, use a tile provider.
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -53,6 +53,9 @@ let markers = {} // User ID → marker
 let paths = {} // User ID → path, when "Plot New Paths" is on
 
 let lastPosition = null // Your last position: { lat, lng }
+const factsArea = document.getElementById('location-details-text') // The location facts panel
+let factsTimer = 0
+let typingTimer = 0
 let lastFactsPosition = null // Where you were when the app last asked for facts
 const FACTS_DISTANCE_MILES = 5 // Ask for new facts after you've moved this far.
 
@@ -119,6 +122,7 @@ function readPosition (message, publisher, timetoken) {
 function showUser (update) {
   const latLng = [update.lat, update.lng]
   let marker = markers[update.userId]
+  if (marker && marker.lastSeen > update.lastSeen) return // History can arrive after a newer live position.
   if (!marker) {
     marker = L.marker(latLng).addTo(layers)
     marker.bindTooltip(textElement([update.username]), { permanent: true, direction: 'top', offset: [-15, -12] })
@@ -127,6 +131,7 @@ function showUser (update) {
   } else {
     marker.setLatLng(latLng)
   }
+  marker.lastSeen = update.lastSeen
   // Elements built with textContent, so a name or greeting can't inject HTML.
   marker.setTooltipContent(textElement([update.username]))
   marker.setPopupContent(textElement([
@@ -194,7 +199,9 @@ async function loadLastPositions () {
 
 // Your location from the browser. Every update goes to the session channel.
 if (navigator.geolocation) {
-  navigator.geolocation.watchPosition(onPosition, error => console.log('Location not available:', error.message))
+  navigator.geolocation.watchPosition(onPosition, error => {
+    factsArea.value = 'Your location isn\'t available: ' + error.message + '. Allow location access for this page and reload it.'
+  })
 } else {
   alert('This browser can\'t share its location.')
 }
@@ -206,8 +213,20 @@ function onPosition (position) {
   askForFacts(lastPosition)
 }
 
+// Publish at most every 2 seconds. A newer position waits for the next slot, so the last one always goes out.
+const PUBLISH_INTERVAL = 2000
+let lastPublish = 0
+let publishTimer = 0
+
 function publishPosition () {
   if (!lastPosition) return
+  clearTimeout(publishTimer)
+  const wait = PUBLISH_INTERVAL - (Date.now() - lastPublish)
+  if (wait > 0) {
+    publishTimer = setTimeout(publishPosition, wait)
+    return
+  }
+  lastPublish = Date.now()
   publishMessage(sessionChannel, { username, greeting, lat: lastPosition.lat, lng: lastPosition.lng })
 }
 
@@ -219,19 +238,20 @@ async function publishMessage (channel, message) {
   }
 }
 
-// Optional AI facts: publish your position on facts-request.<User ID>. A PubNub Function on facts-request.*
-// asks OpenAI about the place and publishes the answer on facts.<User ID> (see functions/location-facts.js).
-let factsTimer = 0
-const factsArea = document.getElementById('location-details-text')
+// Optional AI facts: fire your position on facts-request.<User ID>. A fire goes to Functions only: it isn't
+// delivered to subscribers or stored. A PubNub Function on facts-request.* asks OpenAI about the place and
+// publishes the answer on facts.<User ID> (see functions/location-facts.js).
 
 function askForFacts (position) {
   if (lastFactsPosition && distanceMiles(lastFactsPosition, position) <= FACTS_DISTANCE_MILES) return
   lastFactsPosition = position
-  publishMessage('facts-request.' + userId, { lat: position.lat, lng: position.lng })
+  pubnub.fire({ channel: 'facts-request.' + userId, message: { lat: position.lat, lng: position.lng } })
+    .catch(error => console.log(error))
   factsArea.value = 'Asking for facts about your location...'
   clearTimeout(factsTimer)
   factsTimer = setTimeout(() => {
-    factsArea.value = 'No answer. To see facts about your location here, set up the optional location facts Function (see the tutorial).'
+    factsArea.value = 'No facts yet. To see facts about your location here, set up the optional location facts Function (see the tutorial). ' +
+      'If you have, check its Debug tab in the Admin Portal for errors.'
   }, 20000)
 }
 
@@ -240,11 +260,12 @@ function showFacts (message) {
   if (!message || typeof message.text !== 'string') return
   clearTimeout(factsTimer)
   const text = message.text.substring(0, 2000)
+  clearInterval(typingTimer) // A new answer replaces one that's still being typed.
   factsArea.value = ''
   let i = 0
-  const typing = setInterval(() => {
+  typingTimer = setInterval(() => {
     if (i < text.length) factsArea.value += text[i++]
-    else clearInterval(typing)
+    else clearInterval(typingTimer)
   }, 20)
 }
 

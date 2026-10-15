@@ -1,5 +1,5 @@
-// PubNub Function (After Publish) on the channel pattern facts-request.*
-// The app publishes { lat, lng } on facts-request.<User ID>. This Function asks the OpenAI Responses API for
+// PubNub Function (After Publish or Fire) on the channel pattern facts-request.*
+// The app fires { lat, lng } on facts-request.<User ID>. This Function asks the OpenAI Responses API for
 // a few facts about that place and publishes them as { text } on facts.<User ID>, which the app subscribes to.
 // Set your OpenAI API key as the Function secret OPENAI_API_KEY.
 
@@ -27,19 +27,17 @@ export default async (request) => {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`
       },
+      timeout: 9000, // The default is 5 s; a Function may run for up to 10 s.
       body: JSON.stringify({
         model: MODEL,
         instructions: 'You give short, interesting facts about places. Answer in plain text, at most 5 sentences. ' +
           'If you can\'t tell where the coordinates are, say so in one sentence.',
         input: `Tell me about the place at latitude ${lat}, longitude ${lng}: where it is and a few facts about it.`,
-        max_output_tokens: MAX_OUTPUT_TOKENS
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        reasoning: { effort: 'none' }, // Reasoning tokens count against max_output_tokens; facts don't need them.
+        store: false // Don't keep the request and the answer on OpenAI.
       })
     })
-    if (response.status !== 200) {
-      console.log('OpenAI request failed with status', response.status)
-      return request.ok()
-    }
-
     // The text is in the output_text parts of the message items; don't assume it's the first item.
     const output = JSON.parse(response.body).output || []
     const text = output
@@ -51,10 +49,11 @@ export default async (request) => {
       .trim()
     if (!text) return request.ok()
 
-    const userId = request.channel.substring('facts-request.'.length)
+    const userId = request.channels[0].substring('facts-request.'.length)
     await pubnub.publish({ channel: `facts.${userId}`, message: { text } })
     return request.ok()
   } catch (error) {
+    // xhr.fetch() rejects on non-2XX answers too, e.g. a wrong key (401). The Debug tab shows this log.
     console.log('Location facts failed:', error)
     return request.ok() // After Publish: the request was already delivered, ok() just ends this run.
   }
