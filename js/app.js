@@ -56,7 +56,7 @@ sessionStorage.setItem('username', username);
 var pubnub = new PubNub({
   publishKey:   'YOUR_PUBLISH_KEY',
   subscribeKey: 'YOUR_SUBSCRIBE_KEY',
-  uuid: UUID
+  userId: UUID
 });
 
 //ChatGPT Integration
