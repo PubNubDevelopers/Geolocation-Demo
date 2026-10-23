@@ -1,557 +1,329 @@
-function getParameterByName(name, url = window.location.href) {
-    name = name.replace(/[\[\]]/g, '\\$&');
-    var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
-        results = regex.exec(url);
-    if (!results) return null;
-    if (!results[2]) return '';
-    return decodeURIComponent(results[2].replace(/\+/g, ' '));
+// Geolocation tracker: everyone in a session shares their location on one map.
+// Positions are messages on the session channel. Presence counts who's in the session, and
+// Message Persistence gives the last known position of everyone who shared one.
+
+function getParameterByName (name, url = window.location.href) {
+  return new URL(url).searchParams.get(name)
 }
 
-function makeid(length) {
-    var result           = '';
-    var characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    var charactersLength = characters.length;
-    for ( var i = 0; i < length; i++ ) {
-    result += characters.charAt(Math.floor(Math.random() * 
-charactersLength));
-}
-return result;
+function makeid (length) {
+  let result = ''
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  for (let i = 0; i < length; i++) {
+    result += characters.charAt(Math.floor(Math.random() * characters.length))
+  }
+  return result
 }
 
-var GEOchannel = getParameterByName('channel'); // Get channel or make a new channel
-if (!GEOchannel) {
-    GEOchannel = makeid(5);
+// Letters, digits, spaces and basic punctuation only, up to maxLength characters.
+function cleanText (text, maxLength) {
+  return String(text ?? '').replace(/[^\p{L}\p{N} .,!?'-]/gu, '').substring(0, maxLength).trim()
 }
-document.getElementById("channel-label").innerHTML = GEOchannel;
-var orglocation = window.location.href; // This is saved for the interactive demo on PubNub.com. It is not part of the demo of this application. 
-window.history.replaceState(null, null, "?channel="+GEOchannel);
 
-var UUID = getParameterByName('uuid'); // Allows you to force a uuid
-if (!UUID) {
-    let savedUUID = sessionStorage.getItem('uuid');
-    if (!savedUUID) {
-        UUID = makeid(15); // Make new UUID
-    } else {
-        UUID = savedUUID;
-    }
-}
-sessionStorage.setItem('uuid', UUID);
+// The session channel comes from the invite link (?channel=...), or a new one is made.
+let sessionChannel = String(getParameterByName('channel') ?? '').replace(/[^A-Za-z0-9]/g, '').substring(0, 20) || makeid(5)
+document.getElementById('channel-label').textContent = sessionChannel
+window.history.replaceState(null, '', '?channel=' + sessionChannel)
 
-var username = getParameterByName('username'); // Allows you to force a name
+// Keep the same User ID, name and greeting while the tab is open.
+const userId = sessionStorage.getItem('userId') || makeid(15)
+sessionStorage.setItem('userId', userId)
+let username = sessionStorage.getItem('username')
 if (!username) {
-    let savedusername = sessionStorage.getItem('username');
-    if (!savedusername) {
-        let input = prompt("Please enter your name to join the channel.");
-        if (input == null || input == "") {
-            username = "ANON_"+makeid(4); // If they dont give a name and no saved name then make them anonymous 
-        } else {
-            username = input.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
-        }
-    } else {
-        username = savedusername;
-    }
+  username = cleanText(prompt('Please enter your name to join the session.'), 30) || 'ANON_' + makeid(4)
+  sessionStorage.setItem('username', username)
 }
-sessionStorage.setItem('username', username);
+let greeting = sessionStorage.getItem('greeting') || 'Not set.'
 
-var pubnub = new PubNub({
-  publishKey:   'YOUR_PUBLISH_KEY',
+const pubnub = new PubNub({
+  publishKey: 'YOUR_PUBLISH_KEY',
   subscribeKey: 'YOUR_SUBSCRIBE_KEY',
-  userId: UUID
-});
+  userId: userId
+})
 
-//ChatGPT Integration
-var chatGPTChannel = `chatgpt.facts.${UUID}`;
-var chatGPTResponseArea = document.getElementById("location-details-text");
-var currentPosition = {
-    lat: null,
-    long: null
-};
-const DISTANCE_BETWEEN_LOCATIONS_MILES = 5; //A constant that is used to determine if ChatGPT should be updated based on location.
+// Map: Leaflet with OpenStreetMap tiles, no API key needed.
+const map = L.map('map-canvas').setView([37.7749, -122.4194], 2)
+// OpenStreetMap's tile servers are fine for a tutorial, not for heavy use: in production, use a tile provider.
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+}).addTo(map)
+let layers = L.layerGroup().addTo(map) // The markers and paths of the current session.
+let markers = {} // User ID → marker
+let paths = {} // User ID → path, when "Plot New Paths" is on
 
-function getLocation() {
-    if (navigator.geolocation) {
-        navigator.geolocation.watchPosition(showPosition);
-    } else {
-        alert("Not sharing location. Please refresh and try again to share.");
-    }
+let lastPosition = null // Your last position: { lat, lng }
+const factsArea = document.getElementById('location-details-text') // The location facts panel
+let factsTimer = 0
+let typingTimer = 0
+let lastFactsPosition = null // Where you were when the app last asked for facts
+const FACTS_DISTANCE_MILES = 5 // Ask for new facts after you've moved this far.
+
+// Subscriptions: the session channel with presence events, and your own channel for the AI facts.
+let sessionSubscription = null
+const factsSubscription = pubnub.channel('facts.' + userId).subscription()
+factsSubscription.onMessage = event => showFacts(event.message)
+
+function subscribeToSession () {
+  sessionSubscription = pubnub.channel(sessionChannel).subscription({ receivePresenceEvents: true })
+  // A position from someone in the session (or from you): move their marker.
+  sessionSubscription.onMessage = event => {
+    const update = readPosition(event.message, event.publisher, event.timetoken)
+    if (update) showUser(update)
+  }
+  // Someone joined or left: update the count. state-change events carry no occupancy.
+  sessionSubscription.onPresence = event => {
+    if (event.action !== 'state-change') setActiveUsers(event.occupancy)
+  }
+  sessionSubscription.subscribe()
 }
-  
-async function showPosition(position) {
-   if ( document.getElementById('locationshareswitch').checked === false ) {  
-    //Set the channel members
-    var uuids = [
-        UUID,
-        { id: UUID, custom: {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            username: username,
-            greeting: greeting
-        }},
-    ]; 
-    setChannelMembers(GEOchannel, uuids);
-    var message = { 
-        uuid:UUID, 
-        username:username, 
-        greeting: greeting, 
-        lat:position.coords.latitude, 
-        lng:position.coords.longitude
-    };
-
-    //Update with coordinates,
-    publishMessage(GEOchannel, message);
-    // For future feature: playback of user history
-    publishMessage(GEOchannel+"."+UUID, message);
-
-    //Determine if Publish Message to ChatGPT to evaluate with facts
-    sendMessageChatGPT(position.coords.latitude, position.coords.longitude);
-   }
-}
-
-var map;
-var mark = [];
-var lineCoords = {};
-var lineCoordinatesPath = [];
-var bounds = [];
-var lastLat = "";
-var lastLng = "";
-var greeting = sessionStorage.getItem('greeting');
-if (!greeting) {
-    greeting = "Not set.";
-}
-
-var initialize = function() {
-    var myLatlng = new google.maps.LatLng(37.7749,122.4194);
-    map  = new google.maps.Map(document.getElementById('map-canvas'), {
-        zoom: 2,
-        center: myLatlng
-    })
-    bounds  = new google.maps.LatLngBounds();
-};
-
-window.initialize = initialize;
-
-var redraw = function(payload) {
-    if (payload.channel == GEOchannel) {
-        var lineSymbol = {
-            path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW
-        };
-        var lat = payload.message.lat;
-        var lng = payload.message.lng;
-        lastLat = lat;
-        lastLng = lng;
-        var uuid = payload.message.uuid;
-        var displayName = payload.message.username;
-        var greeting = payload.message.greeting;
-        var lastseen = new Date(payload.timetoken.substring(0, 10)*1000);
-        loc = new google.maps.LatLng(lat, lng);
-        if ( document.getElementById('plotnewswitch').checked === false ) {
-            lineCoords = [];
-            if (mark[uuid] && mark[uuid].setMap) {
-                mark[uuid].setMap(null);
-            }
-            if (lineCoordinatesPath[uuid] && lineCoordinatesPath[uuid].setMap) {
-                lineCoordinatesPath[uuid].setMap(null);
-            }
-            mark[uuid] = new google.maps.Marker({
-                position:loc,
-                map:map,
-                label: {
-                    text: displayName,
-                    color: "#000000",
-                    fontWeight: "bold"
-                }
-            });
-
-            var content = "Name: " + displayName + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + lat +  '<br>' + "Long: " + lng +  '<br>' + "Greeting: " + greeting;  
-
-            var infowindow = new google.maps.InfoWindow();
-
-            var markdata = mark[uuid];
-
-            google.maps.event.addListener(mark[uuid], 'click', (function(markdata,content,infowindow){ 
-                return function() {
-                    infowindow.setContent(content);
-                    infowindow.open(map,markdata);
-                    google.maps.event.addListener(map,'click', function(){ 
-                        infowindow.close();
-                    });  
-                };
-            })(markdata,content,infowindow));  
-
-            mark[uuid].setMap(map);
-        } else {
-            if (typeof lineCoords[uuid] == 'undefined' || lineCoords[uuid].length == 0) {
-                lineCoords[uuid] = [];
-            }
-            if (mark[uuid] && mark[uuid].setMap) {
-                mark[uuid].setMap(null);
-            }
-            if (lineCoordinatesPath[uuid] && lineCoordinatesPath[uuid].setMap) {
-                lineCoordinatesPath[uuid].setMap(null);
-            }
-            lineCoords[uuid].push(loc);
-            lineCoordinatesPath[uuid] = new google.maps.Polyline({
-                path: lineCoords[uuid],
-                icons: [{
-                    icon: lineSymbol,
-                    repeat: '35px',
-                    offset: '100%'
-                }],
-                geodesic: true,
-                strokeColor: '#C70E20'
-            });
-            lineCoordinatesPath[uuid].setMap(map);
-
-            mark[uuid] = new google.maps.Marker({
-                position:loc,
-                map:map,
-                label: {
-                    text: displayName,
-                    color: "#000000",
-                    fontWeight: "bold"
-                }
-            });
-
-            var content = "Name: " + displayName + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + lat +  '<br>' + "Long: " + lng +  '<br>' + "Greeting: " + greeting;  
-
-            var infowindow = new google.maps.InfoWindow();
-
-            google.maps.event.addListener(mark[uuid], 'click', function() {
-                infowindow.setContent(content);
-                infowindow.open(map,mark[uuid]);
-                google.maps.event.addListener(map,'click', function(){ 
-                    infowindow.close();
-                });      
-            });
-        
-            mark[uuid].setMap(map);
-        }
-        bounds.extend(loc);
-        if (document.getElementById('fitviewswitch').checked) {
-            map.fitBounds(bounds);       
-            map.panToBounds(bounds); 
-        }
-    } else if (payload.channel ==  GEOchannel+".greet") {
-        alert(payload.message);
-    } else if(payload.channel == chatGPTChannel && (payload.message.sender != undefined && payload.message.sender != pubnub.uuid)) { //Display response from ChatGPT, not from ourselves.
-        //Don't update if ChatGPT couldn't find the location.
-        if(payload.message !== "DNE.") {
-            chatGPTResponseArea.value = '';
-            var speed = 50;  
-            let i = 0;
-            let intervalId = setInterval(() => {
-                if (i < payload.message.content.text.length) {
-                    chatGPTResponseArea.value += payload.message.content.text[i];
-                    i++;
-                } else {
-                    clearInterval(intervalId);
-                }
-            }, speed);  
-        }      
-    }
-};
-
-pubnub.subscribe({
-    channels: [GEOchannel, GEOchannel+'.greet', chatGPTChannel], 
-    withPresence: true
-});
 
 pubnub.addListener({
-    message:redraw,
-    presence: (presenceEvent) => {
-        document.getElementById("active-label").innerHTML = presenceEvent.occupancy;
-    },
-});
+  status: statusEvent => {
+    if (statusEvent.category === 'PNConnectedCategory') updateActiveUsers()
+  }
+})
 
-getLocation();
+subscribeToSession()
+factsSubscription.subscribe()
+loadLastPositions()
 
-getCurrentUsers();
+// Leave the session when the tab closes, so the count drops for the others right away.
+window.addEventListener('pagehide', () => {
+  sessionSubscription.unsubscribe()
+  factsSubscription.unsubscribe()
+})
+// Back button: the browser restored this page from its cache, so subscribe again.
+window.addEventListener('pageshow', event => {
+  if (event.persisted) {
+    sessionSubscription.subscribe()
+    factsSubscription.subscribe()
+  }
+})
 
-async function getCurrentUsers() {
-    try {
-        const hereNowResult = await pubnub.hereNow({
-            channels: [GEOchannel],
-        });
-    } catch (status) {
-        console.log(status);
-    }
+// Anyone with your keys can publish on the channel, so only accept positions with the expected shape.
+// The marker belongs to the publisher, not to an ID inside the message.
+function readPosition (message, publisher, timetoken) {
+  if (!message || typeof message !== 'object') return null
+  const lat = Number(message.lat)
+  const lng = Number(message.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null
+  return {
+    userId: publisher,
+    username: (typeof message.username === 'string' && cleanText(message.username, 30)) || 'ANON',
+    greeting: (typeof message.greeting === 'string' && cleanText(message.greeting, 100)) || 'Not set.',
+    lat,
+    lng,
+    lastSeen: new Date(Number(timetoken) / 10000) // A timetoken counts 100-nanosecond intervals.
+  }
 }
 
-async function loadLastLocations(loadChannel) {
-    try {
-        const response = await pubnub.objects.getChannelMembers({
-            channel: loadChannel,
-            include: {
-                customFields: true,
-                UUIDFields: true,
-                customUUIDFields: true,
-            }
-        });
-        var arrayLength = response.data.length;
-        for (var i = 0; i < arrayLength; i++) {
-            if (response.data[i].uuid.id != UUID && response.data[i].custom) {
-                loc = new google.maps.LatLng(response.data[i].custom.lat, response.data[i].custom.lng);
-                mark[response.data[i].uuid.id] = new google.maps.Marker({
-                    position:loc,
-                    map:map,
-                    label: {
-                        text: response.data[i].custom.username,
-                        color: "#000000",
-                        fontWeight: "bold",
-                    }
-                });
+// Show or move a user's marker, with their name on it and the details in a popup.
+function showUser (update) {
+  const latLng = [update.lat, update.lng]
+  let marker = markers[update.userId]
+  if (marker && marker.lastSeen > update.lastSeen) return // History can arrive after a newer live position.
+  if (!marker) {
+    marker = L.marker(latLng).addTo(layers)
+    marker.bindTooltip(textElement([update.username]), { permanent: true, direction: 'top', offset: [-15, -12] })
+    marker.bindPopup(textElement([]))
+    markers[update.userId] = marker
+  } else {
+    marker.setLatLng(latLng)
+  }
+  marker.lastSeen = update.lastSeen
+  // Elements built with textContent, so a name or greeting can't inject HTML.
+  marker.setTooltipContent(textElement([update.username]))
+  marker.setPopupContent(textElement([
+    'Name: ' + update.username,
+    'Last seen: ' + update.lastSeen.toLocaleString(),
+    'Lat: ' + update.lat,
+    'Long: ' + update.lng,
+    'Greeting: ' + update.greeting
+  ]))
 
-                console.log(response.data[i]);
-
-                var lastseen = new Date(response.data[i].updated);
-
-                var content = "Name: " + response.data[i].custom.username + '<br>' + "Last Seen: " + lastseen + '<br>' + "Lat: " + response.data[i].custom.lat +  '<br>' + "Long: " + response.data[i].custom.lng +  '<br>' + "Greeting: " + response.data[i].custom.greeting;  
-
-                var infowindow = new google.maps.InfoWindow();
-
-                var markdata = response.data[i];
-
-                google.maps.event.addListener(mark[markdata.uuid.id], 'click', (function(markdata,content,infowindow){ 
-                    return function() {
-                        infowindow.setContent(content);
-                        infowindow.open(map,mark[markdata.uuid.id]);
-                        google.maps.event.addListener(map,'click', function(){ 
-                            infowindow.close();
-                        });  
-                    };
-                })(markdata,content,infowindow));  
-                
-
-                mark[response.data[i].uuid.id].setMap(map);
-                bounds.extend(loc);
-            }
-        }
-        if (document.getElementById('fitviewswitch').checked) {
-            map.fitBounds(bounds);       
-            map.panToBounds(bounds); 
-        }
-    } catch (status) {
-        console.log("Get Channel Members Operation Failed w/Error:", status);
-    }
+  if (document.getElementById('plotnewswitch').checked) {
+    if (paths[update.userId]) paths[update.userId].addLatLng(latLng)
+    else paths[update.userId] = L.polyline([latLng], { color: '#C70E20' }).addTo(layers)
+  } else if (paths[update.userId]) {
+    paths[update.userId].remove()
+    delete paths[update.userId]
+  }
+  fitView()
 }
 
-loadLastLocations(GEOchannel);
-
-const validateEmail = (email) => {
-    return String(email)
-        .toLowerCase()
-        .match(
-        /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
-    );
-};
-
-function fallbackCopyTextToClipboard(text) {
-    var textArea = document.createElement("textarea");
-    textArea.value = text;
-    
-    // Avoid scrolling to bottom
-    textArea.style.top = "0";
-    textArea.style.left = "0";
-    textArea.style.position = "fixed";
-
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-
-    try {
-        var successful = document.execCommand('copy');
-        var msg = successful ? 'successful' : 'unsuccessful';
-        console.log('Fallback: Copying text command was ' + msg);
-    } catch (err) {
-        console.error('Fallback: Oops, unable to copy', err);
-    }
-
-    document.body.removeChild(textArea);
-}
-function copyTextToClipboard(text) {
-    if (!navigator.clipboard) {
-        fallbackCopyTextToClipboard(text);
-        return;
-    }
-    navigator.clipboard.writeText(text).then(function() {
-        console.log('Async: Copying to clipboard was successful!');
-    }, function(err) {
-        console.error('Async: Could not copy text: ', err);
-    });
+function textElement (lines) {
+  const div = document.createElement('div')
+  lines.forEach((line, i) => {
+    if (i > 0) div.append(document.createElement('br'))
+    div.append(line)
+  })
+  return div
 }
 
-document.getElementById("newsession").addEventListener("click", function() {
-    if (confirm("Are you sure you want to create a new session? You'll start as the only participant.")) {
-        pubnub.unsubscribe({
-            channels: [GEOchannel, GEOchannel+'.greet']
-        });
-        sessionStorage.removeItem('channel');
-        map = null;
-        bounds = [];
-        lineCoords = {};
-        lineCoordinatesPath = [];
-        GEOchannel = makeid(5);
-        document.getElementById("channel-label").innerHTML = GEOchannel;
-        window.history.replaceState(null, null, "?channel="+GEOchannel);
-        var myLatlng = new google.maps.LatLng(37.7749,122.4194);
-        map = new google.maps.Map(document.getElementById('map-canvas'), {
-            zoom: 2,
-            center: myLatlng
-        })
-        bounds = new google.maps.LatLngBounds();
-        loadLastLocations(GEOchannel); // Load any history on the channel
-        pubnub.subscribe({
-            channels: [GEOchannel, GEOchannel+'.greet'], 
-            withPresence: true
-        });
-        if ( document.getElementById('locationshareswitch').checked === false ) { // Add self to map.                  
-            //Set the channel members
-            var uuids = [
-                    UUID,
-                    { id: UUID, custom: {
-                        lat: lastLat,
-                        lng: lastLng,
-                        username: username,
-                        greeting: greeting
-                    }},
-            ];
-            setChannelMembers(GEOchannel, uuids);
-
-            //Publish with updates
-            var message = {
-                uuid:UUID, 
-                username:username, 
-                lat:lastLat, 
-                lng:lastLng,
-                greeting: document.getElementById('input-greet').value 
-            }
-            publishMessage(GEOchannel, message);
-
-            // For future feature: playback of user history
-            publishMessage(GEOchannel+"."+UUID, message)
-        }
-    };
-}); 
-
-document.getElementById("newinvite").addEventListener("click", function() {
-    let input = prompt("Please enter an email to invite.");
-    if (input != null || input != "") {
-        if (validateEmail(input)) {
-            var body = 'Join me and share locations on the GEO Track App. Join with this link: '+window.location.href.split("?")[0]+'?channel='+GEOchannel;
-            window.open('mailto:'+input+'?subject=GEO Track Invite&body='+encodeURIComponent(body));
-        }
-    }
-});
-
-document.getElementById("newinvitelink").addEventListener("click", function() {
-    if (confirm("Do you want to copy the link to share your session?")) {     
-        copyTextToClipboard(window.location.href.split("?")[0]+'?channel='+GEOchannel);
-    }
-});
-
-document.getElementById("button-changeusername").addEventListener("click", function() {
-    username = document.getElementById('input-changeusername').value.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 30);
-    sessionStorage.setItem('username', username);
-    //Set the channel members
-    var uuids = [
-        UUID,
-        { id: UUID, custom: {
-            lat: lastLat,
-            lng: lastLng,
-            username: username,
-            greeting: greeting
-        }},
-    ];
-    setChannelMembers(GEOchannel, uuids);
-
-    //Publish with updates. // resend last point to update map labels for other users.
-    var message = {
-        uuid:UUID, 
-        username:username, 
-        lat:lastLat, 
-        lng:lastLng,
-        greeting: document.getElementById('input-greet').value
-    }
-    publishMessage(GEOchannel, message);
-
-    // For future feature: playback of user history
-    publishMessage(GEOchannel+"."+UUID, message);
-}); 
-
-document.getElementById("send-greet").addEventListener("click", function() {
-    //publishMessage(GEOchannel + ".greet", username+" says: "+document.getElementById('input-greet').value);
-    sessionStorage.setItem('greeting', document.getElementById('input-greet').value);
-
-    //Set the channel members
-    var uuids = [
-        UUID,
-        { id: UUID, custom: {
-            lat: lastLat,
-            lng: lastLng,
-            username: username,
-            greeting: document.getElementById('input-greet').value
-        }},
-    ];
-    setChannelMembers(GEOchannel, uuids);
-
-    //Publish with updates.
-    var message = {
-        uuid:UUID, 
-        username:username, 
-        lat:lastLat, 
-        lng:lastLng,
-        greeting: document.getElementById('input-greet').value 
-    }
-    publishMessage(GEOchannel, message);
-
-    // For future feature: playback of user history
-    publishMessage(GEOchannel+"."+UUID, message);
-});
-
-//Set the channel members given the channel and UUIDs
-async function setChannelMembers(channel, uuids) {
-    try {
-        const setChannelResult = pubnub.objects.setChannelMembers({
-            channel: channel,
-            uuids
-        });
-    } catch(status) {
-        console.log("Set Channel Member Failed w/ error:", status)    
-    }
+function fitView () {
+  const points = Object.values(markers).map(marker => marker.getLatLng())
+  if (document.getElementById('fitviewswitch').checked && points.length > 0) {
+    map.fitBounds(L.latLngBounds(points), { padding: [40, 40], maxZoom: 14 })
+  }
 }
 
-//Publish the message given the channel and message
-async function publishMessage(channel, message) {
-    try {
-        const result = await pubnub.publish({
-            channel: channel, 
-            message: message
-        });
-    } catch (status) {
-        console.log(status);
+// Ask PubNub how many users are in the session right now.
+async function updateActiveUsers () {
+  try {
+    const result = await pubnub.hereNow({ channels: [sessionChannel] })
+    setActiveUsers(result.totalOccupancy)
+  } catch (error) {
+    console.log(error)
+  }
+}
+
+function setActiveUsers (count) {
+  if (Number.isFinite(count)) document.getElementById('active-label').textContent = count
+}
+
+// Show everyone's last known position: the latest of the last 100 positions in the session.
+async function loadLastPositions () {
+  try {
+    const result = await pubnub.fetchMessages({ channels: [sessionChannel], count: 100 })
+    const latest = {}
+    for (const item of result.channels[sessionChannel] || []) {
+      const update = readPosition(item.message, item.uuid, item.timetoken)
+      if (update) latest[update.userId] = update // Oldest first, so later positions win.
     }
+    Object.values(latest).forEach(showUser)
+  } catch (error) {
+    console.log(error)
+  }
 }
 
-// Evaluates the coordinates to determine city and send to ChatGPT to return facts if a new city.
-function sendMessageChatGPT(latitude, longitude) {
-    //If there is no set position yet, force the distance check to pass.
-    var distance = (currentPosition.lat === null || currentPosition.long === null) ? DISTANCE_BETWEEN_LOCATIONS_MILES + 1 : getDistanceMiles(currentPosition.lat, currentPosition.long, latitude, longitude);
-    
-    //If the coordinates are more than a set amount of miles inbetween, send to ChatGPT to evaluate.
-    if(distance > DISTANCE_BETWEEN_LOCATIONS_MILES) {
-        currentPosition.lat = latitude;
-        currentPosition.long = longitude;      
-        //Get interesting facts about the coordinates from ChatGPT
-        publishMessage(chatGPTChannel, `(${latitude},${longitude})`);    
-    }                       
+// Your location from the browser. Every update goes to the session channel.
+if (navigator.geolocation) {
+  navigator.geolocation.watchPosition(onPosition, error => {
+    factsArea.value = 'Your location isn\'t available: ' + error.message + '. Allow location access for this page and reload it.'
+  })
+} else {
+  alert('This browser can\'t share its location.')
 }
 
-// AI-Generated Code
-// Tool: ChatGPT v4
-function getDistanceMiles(originalLat, originalLng, newLat, newLng) {
-    var originalLatLng = new google.maps.LatLng(originalLat, originalLng);
-    var newLatLng = new google.maps.LatLng(newLat, newLng);
-    var distanceInMeters = google.maps.geometry.spherical.computeDistanceBetween(originalLatLng, newLatLng);
-    // Convert distance to miles
-    return distanceInMeters / 1609.34;
+function onPosition (position) {
+  if (document.getElementById('locationshareswitch').checked) return // "Don't Update My Location"
+  lastPosition = { lat: position.coords.latitude, lng: position.coords.longitude }
+  publishPosition()
+  askForFacts(lastPosition)
 }
+
+// Publish at most every 2 seconds. A newer position waits for the next slot, so the last one always goes out.
+const PUBLISH_INTERVAL = 2000
+let lastPublish = 0
+let publishTimer = 0
+
+function publishPosition () {
+  if (!lastPosition) return
+  clearTimeout(publishTimer)
+  const wait = PUBLISH_INTERVAL - (Date.now() - lastPublish)
+  if (wait > 0) {
+    publishTimer = setTimeout(publishPosition, wait)
+    return
+  }
+  lastPublish = Date.now()
+  publishMessage(sessionChannel, { username, greeting, lat: lastPosition.lat, lng: lastPosition.lng })
+}
+
+async function publishMessage (channel, message) {
+  try {
+    await pubnub.publish({ channel, message })
+  } catch (error) {
+    console.log(error)
+  }
+}
+
+// Optional AI facts: fire your position on facts-request.<User ID>. A fire goes to Functions only: it isn't
+// delivered to subscribers or stored. A PubNub Function on facts-request.* asks OpenAI about the place and
+// publishes the answer on facts.<User ID> (see functions/location-facts.js).
+
+function askForFacts (position) {
+  if (lastFactsPosition && distanceMiles(lastFactsPosition, position) <= FACTS_DISTANCE_MILES) return
+  lastFactsPosition = position
+  pubnub.fire({ channel: 'facts-request.' + userId, message: { lat: position.lat, lng: position.lng } })
+    .catch(error => console.log(error))
+  factsArea.value = 'Asking for facts about your location...'
+  clearTimeout(factsTimer)
+  factsTimer = setTimeout(() => {
+    factsArea.value = 'No facts yet. To see facts about your location here, set up the optional location facts Function (see the tutorial). ' +
+      'If you have, check its Debug tab in the Admin Portal for errors.'
+  }, 20000)
+}
+
+// Type the answer out character by character.
+function showFacts (message) {
+  if (!message || typeof message.text !== 'string') return
+  clearTimeout(factsTimer)
+  const text = message.text.substring(0, 2000)
+  clearInterval(typingTimer) // A new answer replaces one that's still being typed.
+  factsArea.value = ''
+  let i = 0
+  typingTimer = setInterval(() => {
+    if (i < text.length) factsArea.value += text[i++]
+    else clearInterval(typingTimer)
+  }, 20)
+}
+
+// Distance between two positions on Earth (haversine formula).
+function distanceMiles (from, to) {
+  const toRadians = degrees => degrees * Math.PI / 180
+  const dLat = toRadians(to.lat - from.lat)
+  const dLng = toRadians(to.lng - from.lng)
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(from.lat)) * Math.cos(toRadians(to.lat)) * Math.sin(dLng / 2) ** 2
+  return 3958.8 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) // Earth's radius in miles
+}
+
+// Session controls
+document.getElementById('newsession').addEventListener('click', () => {
+  if (!confirm('Are you sure you want to create a new session? You\'ll start as the only participant.')) return
+  sessionSubscription.unsubscribe()
+  layers.remove()
+  layers = L.layerGroup().addTo(map)
+  markers = {}
+  paths = {}
+  sessionChannel = makeid(5)
+  document.getElementById('channel-label').textContent = sessionChannel
+  window.history.replaceState(null, '', '?channel=' + sessionChannel)
+  subscribeToSession()
+  loadLastPositions()
+  publishPosition()
+})
+
+function inviteLink () {
+  return window.location.href.split('?')[0] + '?channel=' + sessionChannel
+}
+
+document.getElementById('newinvite').addEventListener('click', () => {
+  const email = prompt('Please enter an email to invite.')
+  if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const body = 'Join me and share locations on the GEO Track App: ' + inviteLink()
+    window.open('mailto:' + encodeURIComponent(email) + '?subject=GEO%20Track%20Invite&body=' + encodeURIComponent(body))
+  }
+})
+
+document.getElementById('newinvitelink').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(inviteLink())
+    alert('Invite link copied.')
+  } catch (error) {
+    prompt('Copy the invite link:', inviteLink())
+  }
+})
+
+// Name and greeting: saved for this tab and sent with your next position, so the others see them at once.
+document.getElementById('button-changeusername').addEventListener('click', () => {
+  username = cleanText(document.getElementById('input-changeusername').value, 30) || username
+  sessionStorage.setItem('username', username)
+  publishPosition()
+})
+
+document.getElementById('send-greet').addEventListener('click', () => {
+  greeting = cleanText(document.getElementById('input-greet').value, 100) || 'Not set.'
+  sessionStorage.setItem('greeting', greeting)
+  publishPosition()
+})
